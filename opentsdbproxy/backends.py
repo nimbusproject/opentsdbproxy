@@ -95,9 +95,13 @@ class ForwardingOpenTSDBBackend(BaseOpenTSDBBackend):
 class DjangoAuthorizingBackend(ForwardingOpenTSDBBackend):
     pass
 
+class MockDjangoAuthorizingBackend(MockOpenTSDBBackend):
+    pass
+
 
 backends = {
     'mock': MockOpenTSDBBackend,
     'forwarding': ForwardingOpenTSDBBackend,
     'django_authz': DjangoAuthorizingBackend,
+    'mock_django_authz': DjangoAuthorizingBackend,
 }

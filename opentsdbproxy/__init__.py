@@ -19,7 +19,8 @@ DEFAULT_BACKEND_PARAMS = {}
 
 class OpenTSDBProxy(object):
 
-    def __init__(self, port=None, backend=None, backend_parameters=None):
+    def __init__(self, port=None, backend=None, backend_parameters=None,
+            ssl_cert_path=None, ssl_key_path=None):
 
         self.port = port
         if self.port is None:
@@ -33,14 +34,22 @@ class OpenTSDBProxy(object):
             raise ConfigurationException("The '%s' backend isn't supported" % backend)
         self.backend = Backend(**backend_parameters)
 
+        if ssl_cert_path is None or ssl_key_path is None:
+            raise ConfigurationException("An SSL cert and key must be provided")
+
         self.pool = Pool(MAX_CONNECTIONS)
+        log.debug("Starting server with SSL cert '%s' and key '%s'" % (ssl_cert_path, ssl_key_path))
 
         self.server = StreamServer(('', self.port), self.handle_message,
-                certfile="/Users/patricka/.ssh/server.crt",
-                keyfile="/Users/patricka/.ssh/server.key",
-                spawn=self.pool)
+            certfile=ssl_cert_path, keyfile=ssl_key_path,
+            spawn=self.pool)
         log.info("%s serving on port %s" % (__fullversion__, self.port))
-        self.server.serve_forever()
+        try:
+            self.server.serve_forever()
+        except KeyboardInterrupt:
+            log.info("Stopping server...")
+            self.server.stop()
+            log.info("Server stopped")
 
     def handle_message(self, sock, address):
         log.debug("Opening socket")
@@ -62,7 +71,7 @@ class OpenTSDBProxy(object):
                 log.debug("Responded: '%s'" % response)
                 sock.sendall(response)
             else:
-                log.debug("Got no response from forwarding")
+                log.debug("Got no response from backend")
                 break
 
         sock.close()
