@@ -8,7 +8,7 @@ from opentsdbproxy.exceptions import ConfigurationException
 
 log = logging.getLogger(__name__)
 
-__version__ = "0.1"
+__version__ = "0.1.1"
 __fullversion__ = "OpenTSDB Proxy %s" % __version__
 
 MAX_CONNECTIONS = 10000
