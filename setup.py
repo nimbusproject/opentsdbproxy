@@ -37,11 +37,11 @@ setupdict['packages'] = find_packages()
 
 setupdict['test_suite'] = 'opentsdb'
 
-setupdict['install_requires'] = ['gevent>=0.13.7', 'mock']
+setupdict['install_requires'] = ['gevent>=0.13.7']
 setupdict['tests_require'] = ['nose', 'mock']
 setupdict['extras_require'] = {
     'test': setupdict['tests_require'],
-    'django_authz': "django >= 1.4, < 1.5",
+    'django_authz': ["django >= 1.4, < 1.5", "MySQL-python"]
 }
 setupdict['test_suite'] = 'nose.collector'
 
