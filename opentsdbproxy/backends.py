@@ -1,5 +1,9 @@
+import os
+import sys
 import socket
 import logging
+
+import opentsdbproxy
 
 from opentsdbproxy.exceptions import ConfigurationException
 
@@ -35,7 +39,7 @@ class MockOpenTSDBBackend(BaseOpenTSDBBackend):
         log.debug("MockOpenTSDBBackend got message: '%s'" % message)
 
         if message == "version\n":
-            return "Fake OpenTSDB"
+            return "%s\n" % opentsdbproxy.__version__
         else:
             return None
 
@@ -92,16 +96,111 @@ class ForwardingOpenTSDBBackend(BaseOpenTSDBBackend):
             return None
 
 
-class DjangoAuthorizingBackend(ForwardingOpenTSDBBackend):
-    pass
+class DjangoMixin(object):
 
-class MockDjangoAuthorizingBackend(MockOpenTSDBBackend):
-    pass
+    django_setup = False
+
+    def setup_django(self, django_project_path, django_settings_module):
+        sys.path.append(django_project_path)  # TODO: check path exists
+        os.environ['DJANGO_SETTINGS_MODULE'] = django_settings_module
+        self.django_setup = True
+
+        from django.contrib.auth.models import User
+        from django.contrib.auth import authenticate
+        self.User = User
+        self.authenticate = authenticate
+
+    def filter_message(self, message):
+        """Checks each line in a tcollector message for user and password,
+        rejects messages without a valid username and password. Returns a
+        tcollector message with the unauth'd lines removed.
+        """
+        cached_authed_pairs = {}
+        authzed_lines = []
+
+        for line in message.splitlines():
+            user = None
+            password = None
+            items = line.split()
+            for tag in items:
+                split_tag = tag.split('=', 1)
+                if len(split_tag) != 2:
+                    continue
+                key, value = split_tag
+                if key == 'user':
+                    user = value
+                elif key == 'password':
+                    password = value
+
+            cached_auth = cached_authed_pairs.get((user, password))
+            if cached_auth is not None:
+                auth = cached_auth
+            else:
+                auth = self.authenticate(username=user, password=password)
+                cached_authed_pairs[(user, password)] = auth
+
+            if auth is not None:
+
+                # Sanitize password
+                password_tag = "password=%s" % password
+                line = line.replace(password_tag, '')
+
+                authzed_lines.append(line)
+
+        return '\n'.join(authzed_lines) + '\n'  # Add trailing \n because tcollector does
+
+
+class DjangoAuthorizingBackend(ForwardingOpenTSDBBackend, DjangoMixin):
+    def __init__(self, host=None, port=None, django_project_path=None, django_settings_module=None):
+        if django_project_path is None or django_settings_module is None:
+            raise ConfigurationException(
+                "%s requires a django_settings_module and django_project_path to be configured" % (
+                self.__class__.__name__,))
+
+        self.setup_django(django_project_path, django_settings_module)
+
+        ForwardingOpenTSDBBackend.__init__(self, host=host, port=port)
+
+    def handle(self, message):
+
+        if message == "version\n":
+            filtered_message = message
+        else:
+            filtered_message = self.filter_message(message)
+
+        log.debug("Filtered message to: %s" % filtered_message)
+        return ForwardingOpenTSDBBackend.handle(self, filtered_message)
+
+
+class MockDjangoAuthorizingBackend(MockOpenTSDBBackend, DjangoMixin):
+
+    def __init__(self, host=None, port=None, django_project_path=None, django_settings_module=None):
+        if django_project_path is None or django_settings_module is None:
+            raise ConfigurationException(
+                "%s requires a django_settings_module and django_project_path to be configured" % (
+                self.__class__.__name__,))
+
+        self.setup_django(django_project_path, django_settings_module)
+
+        self.messages = []
+        self.authzed_messages = []
+
+    def handle(self, message):
+
+        self.messages.append(message)
+        log.debug("MockDjangoAuthorizingBackend got message: '%s'" % message)
+
+        if message == "version\n":
+            return "%s\n" % opentsdbproxy.__version__
+        else:
+            filtered_message = self.filter_message(message)
+            log.debug("Filtered Message: %s" % filtered_message)
+            self.authzed_messages.append(filtered_message)
 
 
 backends = {
     'mock': MockOpenTSDBBackend,
     'forwarding': ForwardingOpenTSDBBackend,
     'django_authz': DjangoAuthorizingBackend,
-    'mock_django_authz': DjangoAuthorizingBackend,
+    'mock_django_authz': MockDjangoAuthorizingBackend,
 }

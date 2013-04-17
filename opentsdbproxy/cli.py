@@ -37,12 +37,7 @@ def main():
 
     if backend == 'forwarding':
         backend_parameters = {'host': args.opentsdb_host, 'port': args.opentsdb_port}
-    elif backend == 'mock_django_authz':
-        backend_parameters = {
-            'django_project_path': args.django_project_path,
-            'django_settings_module': args.django_settings_module
-        }
-    elif backend == 'django_authz':
+    elif backend in ('django_authz', 'mock_django_authz',):
         backend_parameters = {
             'host': args.opentsdb_host, 'port': args.opentsdb_port,
             'django_project_path': args.django_project_path,
