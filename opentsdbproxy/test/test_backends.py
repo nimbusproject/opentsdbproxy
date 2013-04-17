@@ -10,12 +10,26 @@ from random import choice
 from nose.plugins.skip import SkipTest
 from unittest import TestCase
 
-from opentsdbproxy.backends import MockOpenTSDBBackend, ForwardingOpenTSDBBackend, MockDjangoAuthorizingBackend
+from opentsdbproxy.backends import MockOpenTSDBBackend,\
+    ForwardingOpenTSDBBackend, MockDjangoAuthorizingBackend, DjangoAuthorizingBackend
 
 OPENTSDB_BUILT_STRING = "net.opentsdb built at revision"
 DJANGO_PROJECT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)),
     "django_test_project")
 DJANGO_SETTINGS_MODULE = "testproject.settings"
+
+
+def query_opentsdb(host, port, m):
+    start = "1m-ago"
+
+    params = urllib.urlencode({
+        'm': m,
+        'start': start,
+        'ascii': 'true',
+    })
+    connection = httplib.HTTPConnection(host, port)
+    connection.request('GET', '/q?%s' % params)
+    return connection.getresponse()
 
 
 class TestMockOpenTSDBBackend(TestCase):
@@ -68,21 +82,10 @@ class TestForwardingOpenTSDBBackend(TestCase):
         self.assertIsNone(response)
 
         # Check that our value got put into OpenTSDB
-
-        start = "1m-ago"
         m = "avg:%s{uuid=%s}" % (metric, unique_tag)
 
-        params = urllib.urlencode({
-            'm': m,
-            'start': start,
-            'ascii': 'true',
-        })
-        connection = httplib.HTTPConnection(self.opentsdb_host, self.opentsdb_port)
-        connection.request('GET', '/q?%s' % params)
-        response = connection.getresponse()
-
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
         self.assertEqual(200, response.status)
-
         read_response = response.read()
 
         read_metric, ts, read_value, read_tag = read_response.split()
@@ -182,3 +185,106 @@ class TestMockDjangoAuthorizingBackend(TestCase):
 
         good_msg_password_stripped = good_msg.replace(' password=root', '')
         self.assertIn(good_msg_password_stripped, self.backend.authzed_messages)
+
+
+class TestDjangoAuthorizingBackend(TestCase):
+
+    def setUp(self):
+
+        self.opentsdb_host = os.environ.get('OPENTSDB_HOST')
+        self.opentsdb_port = os.environ.get('OPENTSDB_PORT')
+
+        if self.opentsdb_host is None or self.opentsdb_port is None:
+            raise SkipTest("OPENTSDB_HOST and OPENTSDB_PORT must be set for OpenTSDB backed tests")
+
+        self.backend = DjangoAuthorizingBackend(
+            host=self.opentsdb_host,
+            port=self.opentsdb_port,
+            django_project_path=DJANGO_PROJECT_DIR,
+            django_settings_module=DJANGO_SETTINGS_MODULE
+        )
+
+    def test_messages(self):
+        msg = "version\n"
+        response = self.backend.handle(msg)
+        self.assertIn(OPENTSDB_BUILT_STRING, response)
+
+        now = int(time.time())
+        metric = "test.my.value"
+        value = choice(range(0, 42))
+        good_username = "root"
+        good_password = "root"
+        bad_username = "joshua"
+        bad_password = "pencil"
+
+        # Ensure that messages with no u/p are filtered
+        unique_tag = uuid.uuid4().hex
+        msg = "put %s %s %s uuid=%s\n" % (metric, now, value, unique_tag)
+        response = self.backend.handle(msg)
+
+        time.sleep(1)
+        self.assertIsNone(response)
+
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
+        self.assertEqual(400, response.status)
+
+        # Ensure that messages with bad u/p are filtered
+        unique_tag = uuid.uuid4().hex
+        msg = "put %s %s %s uuid=%s user=%s password=%s\n" % (
+            metric, now, value, unique_tag, bad_username, bad_password)
+        response = self.backend.handle(msg)
+
+        time.sleep(1)
+        self.assertIsNone(response)
+
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
+        self.assertEqual(400, response.status)
+
+        # Ensure that messages with good u bad p are filtered
+        unique_tag = uuid.uuid4().hex
+        msg = "put %s %s %s uuid=%s user=%s password=%s\n" % (
+            metric, now, value, unique_tag, good_username, bad_password)
+        response = self.backend.handle(msg)
+
+        time.sleep(1)
+        self.assertIsNone(response)
+
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
+        self.assertEqual(400, response.status)
+
+        # Ensure that messages with good u no p are filtered
+        unique_tag = uuid.uuid4().hex
+        msg = "put %s %s %s uuid=%s user=%s\n" % (
+            metric, now, value, unique_tag, good_username)
+        response = self.backend.handle(msg)
+
+        time.sleep(1)
+        self.assertIsNone(response)
+
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
+        self.assertEqual(400, response.status)
+
+        # Ensure that messages with good u good p are passed through
+        unique_tag = uuid.uuid4().hex
+        msg = "put %s %s %s uuid=%s user=%s password=%s\n" % (
+            metric, now, value, unique_tag, good_username, good_password)
+        response = self.backend.handle(msg)
+
+        time.sleep(1)
+        self.assertIsNone(response)
+
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+        response = query_opentsdb(self.opentsdb_host, self.opentsdb_port, m)
+        self.assertEqual(200, response.status)
+
+        read_response = response.read()
+        read_metric, ts, read_value, read_tag = read_response.split(" ", 3)
+
+        self.assertEqual(read_metric, metric)
+        self.assertEqual(read_value, str(value))
+        self.assertIn("uuid=%s" % unique_tag, read_tag)
+        self.assertIn("user=%s" % good_username, read_tag)

@@ -170,7 +170,10 @@ class DjangoAuthorizingBackend(ForwardingOpenTSDBBackend, DjangoMixin):
             filtered_message = self.filter_message(message)
 
         log.debug("Filtered message to: %s" % filtered_message)
-        return ForwardingOpenTSDBBackend.handle(self, filtered_message)
+        if filtered_message != '\n':
+            return ForwardingOpenTSDBBackend.handle(self, filtered_message)
+        else:
+            return None
 
 
 class MockDjangoAuthorizingBackend(MockOpenTSDBBackend, DjangoMixin):
