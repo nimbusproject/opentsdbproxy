@@ -1,6 +1,8 @@
 import os
 import time
 import uuid
+import urllib
+import httplib
 
 import opentsdbproxy
 
@@ -8,9 +10,12 @@ from random import choice
 from nose.plugins.skip import SkipTest
 from unittest import TestCase
 
-from opentsdbproxy.backends import MockOpenTSDBBackend, ForwardingOpenTSDBBackend
+from opentsdbproxy.backends import MockOpenTSDBBackend, ForwardingOpenTSDBBackend, MockDjangoAuthorizingBackend
 
 OPENTSDB_BUILT_STRING = "net.opentsdb built at revision"
+DJANGO_PROJECT_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+    "django_test_project")
+DJANGO_SETTINGS_MODULE = "testproject.settings"
 
 
 class TestMockOpenTSDBBackend(TestCase):
@@ -55,10 +60,125 @@ class TestForwardingOpenTSDBBackend(TestCase):
         value = choice(range(0, 42))
         unique_tag = uuid.uuid4().hex
 
-        msg = "put %s %s %s uuid=%s" % (metric, now, value, unique_tag)
+        msg = "put %s %s %s uuid=%s\n" % (metric, now, value, unique_tag)
         response = self.backend.handle(msg)
-        print msg
+
+        # Wait 1s for a response
         time.sleep(1)
         self.assertIsNone(response)
 
-        assert False
+        # Check that our value got put into OpenTSDB
+
+        start = "1m-ago"
+        m = "avg:%s{uuid=%s}" % (metric, unique_tag)
+
+        params = urllib.urlencode({
+            'm': m,
+            'start': start,
+            'ascii': 'true',
+        })
+        connection = httplib.HTTPConnection(self.opentsdb_host, self.opentsdb_port)
+        connection.request('GET', '/q?%s' % params)
+        response = connection.getresponse()
+
+        self.assertEqual(200, response.status)
+
+        read_response = response.read()
+
+        read_metric, ts, read_value, read_tag = read_response.split()
+
+        self.assertEqual(read_metric, metric)
+        self.assertEqual(read_value, str(value))
+        self.assertEqual(read_tag, "uuid=%s" % unique_tag)
+
+
+class TestMockDjangoAuthorizingBackend(TestCase):
+
+    def setUp(self):
+
+        self.backend = MockDjangoAuthorizingBackend(
+            django_project_path=DJANGO_PROJECT_DIR,
+            django_settings_module=DJANGO_SETTINGS_MODULE
+        )
+
+    def test_messages(self):
+        msg = "version\n"
+        response = self.backend.handle(msg)
+        self.assertEqual(response, "%s\n" % opentsdbproxy.__version__)
+
+        # Make sure messages with no username/password don't get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca\n"
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+        self.assertEqual(0, len(self.backend.authzed_messages))
+
+        self.backend.reset()
+
+        # Make sure messages with bad username/password don't get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n"
+        msg = msg % ("joshua", "pencil")
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+        self.assertEqual(0, len(self.backend.authzed_messages))
+
+        self.backend.reset()
+
+        # Make sure messages with good username and bad password don't get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n"
+        msg = msg % ("root", "pencil")
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+        self.assertEqual(0, len(self.backend.authzed_messages))
+
+        self.backend.reset()
+
+        # Make sure messages with good username and no password don't get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s\n"
+        msg = msg % "root"
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+        self.assertEqual(0, len(self.backend.authzed_messages))
+
+        self.backend.reset()
+
+        # Make sure messages with good username and good password get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n"
+        msg = msg % ("root", "root")
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+        msg_password_stripped = msg.replace(' password=root', '')
+        self.assertIn(msg_password_stripped, self.backend.authzed_messages)
+
+        self.backend.reset()
+
+        # Make sure messages with two parts and good username and good password get through
+        msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n"
+        msg += "put test.my.value 1366155635 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n"
+        msg = msg % ("root", "root", "root", "root")
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+
+        msg_password_stripped = msg.replace(' password=root', '')
+        self.assertIn(msg_password_stripped, self.backend.authzed_messages)
+
+        self.backend.reset()
+
+        # Make sure messages with some auth lines and some not auth lines are
+        # handled appropriately
+        good_msg = "put test.my.value 1366155625 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n" % (
+            "root", "root")
+        bad_msg = "put test.my.value 1366155635 42 host=bandersnatch.phys.uvic.ca user=%s password=%s\n" % (
+            "root", "bad")
+        msg = good_msg + bad_msg
+        response = self.backend.handle(msg)
+        self.assertIsNone(response)
+        self.assertIn(msg, self.backend.messages)
+
+        good_msg_password_stripped = good_msg.replace(' password=root', '')
+        self.assertIn(good_msg_password_stripped, self.backend.authzed_messages)

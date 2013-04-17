@@ -82,6 +82,7 @@ class ForwardingOpenTSDBBackend(BaseOpenTSDBBackend):
             self.connection = self.connect()
             if self.connection is None:
                 raise Exception("Couldn't connect to OpenTSDB %s:%s" % (self.host, self.port))
+        log.debug("Forwarding: '%s'" % message)
         self.connection.sendall(message)
         try:
             response = ''
@@ -145,7 +146,7 @@ class DjangoMixin(object):
                 password_tag = "password=%s" % password
                 line = line.replace(password_tag, '')
 
-                authzed_lines.append(line)
+                authzed_lines.append(line.strip())
 
         return '\n'.join(authzed_lines) + '\n'  # Add trailing \n because tcollector does
 
@@ -194,8 +195,13 @@ class MockDjangoAuthorizingBackend(MockOpenTSDBBackend, DjangoMixin):
             return "%s\n" % opentsdbproxy.__version__
         else:
             filtered_message = self.filter_message(message)
-            log.debug("Filtered Message: %s" % filtered_message)
-            self.authzed_messages.append(filtered_message)
+            log.debug("Filtered Message: '%s'" % filtered_message)
+            if filtered_message != '\n':
+                self.authzed_messages.append(filtered_message)
+
+    def reset(self):
+        self.messages = []
+        self.authzed_messages = []
 
 
 backends = {
