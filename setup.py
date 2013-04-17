@@ -41,6 +41,7 @@ setupdict['install_requires'] = ['gevent>=0.13.7', 'mock']
 setupdict['tests_require'] = ['nose', 'mock']
 setupdict['extras_require'] = {
     'test': setupdict['tests_require'],
+    'django_authz': "django >= 1.4, < 1.5",
 }
 setupdict['test_suite'] = 'nose.collector'
 
