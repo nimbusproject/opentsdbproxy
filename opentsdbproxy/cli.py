@@ -48,6 +48,6 @@ def main():
 
     try:
         opentsdbproxy.OpenTSDBProxy(backend=backend, backend_parameters=backend_parameters,
-            ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path)
+            ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path, port=args.port)
     except ConfigurationException as ce:
         print >>sys.stderr, "Configuration Error: %s" % str(ce)
