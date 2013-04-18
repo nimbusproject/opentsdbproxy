@@ -7,12 +7,13 @@
 
 import sys
 import os
+import opentsdbproxy
 
 # Add /usr/local/include to the path for macs, fixes easy_install for several packages (like gevent and pyyaml)
 if sys.platform == 'darwin':
     os.environ['C_INCLUDE_PATH'] = '/usr/local/include'
 
-version = '0.1-dev'
+version = opentsdbproxy.__version__
 
 setupdict = {
     'name': 'opentsdbproxy',
